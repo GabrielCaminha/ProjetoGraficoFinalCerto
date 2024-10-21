@@ -6,6 +6,7 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
@@ -15,6 +16,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.jjoe64.graphview.GraphView;
 import com.jjoe64.graphview.series.DataPoint;
 import com.jjoe64.graphview.series.LineGraphSeries;
+import com.jjoe64.graphview.DefaultLabelFormatter;
 
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -27,6 +29,8 @@ public class CurvaDeMagnetizacaoActivity extends AppCompatActivity {
 
     private GraphView graph;
     private Button uploadButton;
+    private EditText areaInput;
+    private EditText comprimentoInput;
 
     private ActivityResultLauncher<Intent> filePickerLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
@@ -48,6 +52,11 @@ public class CurvaDeMagnetizacaoActivity extends AppCompatActivity {
 
         graph = findViewById(R.id.graph);
         uploadButton = findViewById(R.id.upload_button);
+        areaInput = findViewById(R.id.area_input);
+        comprimentoInput = findViewById(R.id.comprimento_input);
+
+        // Configurar o formatador personalizado para exibir valores com precisão
+        graph.getGridLabelRenderer().setLabelFormatter(new CustomLabelFormatter());
 
         uploadButton.setOnClickListener(view -> openFilePicker());
     }
@@ -61,6 +70,10 @@ public class CurvaDeMagnetizacaoActivity extends AppCompatActivity {
 
     private void readExcelFile(Uri uri) {
         try {
+            // Obtém os valores de área e comprimento dos campos de entrada
+            double area = Double.parseDouble(areaInput.getText().toString());
+            double comprimento = Double.parseDouble(comprimentoInput.getText().toString());
+
             InputStream inputStream = getContentResolver().openInputStream(uri);
             XSSFWorkbook workbook = new XSSFWorkbook(inputStream);
             org.apache.poi.ss.usermodel.Sheet sheet = workbook.getSheetAt(0); // Obtém a primeira aba do arquivo
@@ -104,10 +117,19 @@ public class CurvaDeMagnetizacaoActivity extends AppCompatActivity {
                 }
             }
 
-            // Calcular corrente de magnetização (MMF / Fluxo)
+            // Calcular B e H
             List<Double> correnteMagnetizacao = new ArrayList<>();
+            List<Double> campoMagnetico = new ArrayList<>();
+            List<Double> fluxoMagnetico = new ArrayList<>();
+
             for (int i = 0; i < mmf.size(); i++) {
-                correnteMagnetizacao.add(mmf.get(i) / fluxo.get(i));
+                // Cálculo de B e H
+                double B = fluxo.get(i) / area; // B = Fluxo / Área
+                double H = mmf.get(i) / comprimento; // H = MMF / Comprimento
+
+                // Adiciona os resultados às listas
+                fluxoMagnetico.add(B);
+                campoMagnetico.add(H);
             }
 
             // Gerar tempo (0 <= t <= 340ms; passo de 1/3000s)
@@ -117,26 +139,41 @@ public class CurvaDeMagnetizacaoActivity extends AppCompatActivity {
                 tempo.add(i * passo * 1000);  // Tempo em milissegundos
             }
 
+            // Remover séries anteriores, se existirem
+            graph.removeAllSeries(); // Remove todas as séries do gráfico
+
             // Criar série de dados e adicionar ao gráfico
             DataPoint[] dataPoints = new DataPoint[mmf.size()];
             for (int i = 0; i < mmf.size(); i++) {
-                dataPoints[i] = new DataPoint(tempo.get(i), correnteMagnetizacao.get(i));
+                dataPoints[i] = new DataPoint(campoMagnetico.get(i), fluxoMagnetico.get(i)); // Use H e B
             }
 
             LineGraphSeries<DataPoint> series = new LineGraphSeries<>(dataPoints);
             graph.addSeries(series);
             graph.getViewport().setScrollable(true);
             graph.getViewport().setScalable(true);
-            graph.getViewport().setMinX(0);
-            graph.getViewport().setMaxX(getMaxValue(tempo)); // O máximo deve ser baseado no tempo
-            graph.getViewport().setMinY(0);
-            graph.getViewport().setMaxY(getMaxValue(correnteMagnetizacao));
+
+            // Ajustar limites dos eixos
+            graph.getViewport().setMinX(getMinValue(campoMagnetico));
+            graph.getViewport().setMaxX(getMaxValue(campoMagnetico)); // Max X baseado em H
+            graph.getViewport().setMinY(getMinValue(fluxoMagnetico));
+            graph.getViewport().setMaxY(getMaxValue(fluxoMagnetico) * 1.1); // Max Y com um aumento de 10%
 
             Toast.makeText(this, "Gráfico gerado com sucesso!", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Log.e("ExcelReader", "Erro ao ler o arquivo: " + e.getMessage(), e);
             Toast.makeText(this, "Erro ao ler o arquivo: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private double getMinValue(List<Double> values) {
+        double minValue = Double.MAX_VALUE; // Inicializa com o maior valor possível
+        for (Double value : values) {
+            if (value < minValue) {
+                minValue = value;
+            }
+        }
+        return minValue;
     }
 
     private double getMaxValue(List<Double> values) {
@@ -147,5 +184,22 @@ public class CurvaDeMagnetizacaoActivity extends AppCompatActivity {
             }
         }
         return maxValue;
+    }
+
+    // Classe personalizada para formatar rótulos
+    class CustomLabelFormatter extends DefaultLabelFormatter {
+        @Override
+        public String formatLabel(double value, boolean isValueX) {
+            // Formatação para exibir valores com precisão
+            if (Math.abs(value) < 1) {
+                return String.format("%.4f", value); // Exibir 4 casas decimais para valores pequenos
+            } else if (Math.abs(value) >= 1000000) {
+                return String.format("%.1fM", value / 1000000); // Exibir em milhões
+            } else if (Math.abs(value) >= 1000) {
+                return String.format("%.1fk", value / 1000); // Exibir em milhares
+            } else {
+                return String.format("%.2f", value); // Exibir 2 casas decimais para valores maiores
+            }
+        }
     }
 }
